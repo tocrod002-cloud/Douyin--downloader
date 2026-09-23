@@ -1,6 +1,12 @@
-const MOBILE_UA =
+const ANDROID_UA =
   "Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro) " +
-  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36";
+  "AppleWebKit/537.36 (KHTML, like Gecko) " +
+  "Chrome/140.0.0.0 Mobile Safari/537.36";
+
+const IPHONE_UA =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) " +
+  "AppleWebKit/605.1.15 (KHTML, like Gecko) " +
+  "Version/18.6 Mobile/15E148 Safari/604.1";
 
 const URL_RE =
   /https?:\/\/[^\s，,、；;）)\]】》"']+/i;
@@ -28,7 +34,7 @@ function json(data, status = 200) {
 }
 
 
-function isDouyinHost(hostname) {
+function douyinHost(hostname) {
   const h =
     String(hostname || "")
       .toLowerCase();
@@ -54,12 +60,12 @@ function extractFirstUrl(text) {
 
 
 function extractAwemeId(text) {
-  const s =
+  const value =
     String(text || "");
 
   for (const pattern of ID_PATTERNS) {
     const match =
-      s.match(pattern);
+      value.match(pattern);
 
     if (match) {
       return match[1];
@@ -68,32 +74,33 @@ function extractAwemeId(text) {
 
   if (
     /^\d{15,22}$/.test(
-      s.trim()
+      value.trim()
     )
   ) {
-    return s.trim();
+    return value.trim();
   }
 
   return null;
 }
 
 
-function detectTypeHint(text) {
-  const s =
+function detectType(text) {
+  const value =
     String(text || "")
       .toLowerCase();
 
   if (
-    s.includes("/share/slides/") ||
-    s.includes("/share/note/") ||
-    s.includes("/note/")
+    value.includes("/share/slides/") ||
+    value.includes("/share/note/") ||
+    value.includes("/note/") ||
+    value.includes("is_slides=1")
   ) {
     return "slides";
   }
 
   if (
-    s.includes("/share/video/") ||
-    s.includes("/video/")
+    value.includes("/share/video/") ||
+    value.includes("/video/")
   ) {
     return "video";
   }
@@ -131,22 +138,13 @@ async function resolveInput(rawInput) {
     return {
       awemeId: directId,
       typeHint:
-        detectTypeHint(input),
+        detectType(input),
       finalUrl:
         firstUrl || ""
     };
   }
 
   if (!firstUrl) {
-    if (directId) {
-      return {
-        awemeId: directId,
-        typeHint:
-          detectTypeHint(input),
-        finalUrl: ""
-      };
-    }
-
     throw new Error(
       "找不到抖音鏈接"
     );
@@ -157,7 +155,6 @@ async function resolveInput(rawInput) {
   try {
     current =
       new URL(firstUrl);
-
   } catch {
     throw new Error(
       "鏈接格式不正確"
@@ -166,12 +163,12 @@ async function resolveInput(rawInput) {
 
   for (
     let i = 0;
-    i < 8;
+    i < 10;
     i += 1
   ) {
 
     if (
-      !isDouyinHost(
+      !douyinHost(
         current.hostname
       )
     ) {
@@ -180,16 +177,16 @@ async function resolveInput(rawInput) {
       );
     }
 
-    const idHere =
+    const id =
       extractAwemeId(
         current.href
       );
 
-    if (idHere) {
+    if (id) {
       return {
-        awemeId: idHere,
+        awemeId: id,
         typeHint:
-          detectTypeHint(
+          detectType(
             current.href
           ),
         finalUrl:
@@ -201,18 +198,17 @@ async function resolveInput(rawInput) {
       await fetch(
         current,
         {
-          method: "GET",
           redirect: "manual",
 
           headers: {
             "User-Agent":
-              MOBILE_UA,
+              IPHONE_UA,
 
             "Accept":
               "text/html,application/xhtml+xml,*/*",
 
             "Accept-Language":
-              "zh-CN,zh;q=0.9,en;q=0.7",
+              "zh-CN,zh;q=0.9",
 
             "Referer":
               "https://www.douyin.com/"
@@ -224,6 +220,7 @@ async function resolveInput(rawInput) {
       response.status >= 300 &&
       response.status < 400
     ) {
+
       const location =
         response.headers.get(
           "location"
@@ -256,7 +253,7 @@ async function resolveInput(rawInput) {
           idFromHtml,
 
         typeHint:
-          detectTypeHint(
+          detectType(
             current.href +
             " " +
             html
@@ -271,48 +268,47 @@ async function resolveInput(rawInput) {
   }
 
   throw new Error(
-    "無法從這條分享鏈接取得作品 ID"
+    "無法從分享鏈接取得作品 ID"
   );
 }
 
 
-function scanBalancedObject(
+/* -----------------------------------------
+   JSON / SSR 解析
+----------------------------------------- */
+
+
+function scanObject(
   text,
   start
 ) {
   let depth = 0;
-
-  let inString =
-    false;
-
-  let escaped =
-    false;
+  let inString = false;
+  let escaped = false;
 
   for (
     let i = start;
     i < text.length;
     i += 1
   ) {
+
     const ch =
       text[i];
 
     if (inString) {
 
       if (escaped) {
-        escaped =
-          false;
+        escaped = false;
 
       } else if (
         ch === "\\"
       ) {
-        escaped =
-          true;
+        escaped = true;
 
       } else if (
         ch === '"'
       ) {
-        inString =
-          false;
+        inString = false;
       }
 
       continue;
@@ -321,9 +317,7 @@ function scanBalancedObject(
     if (
       ch === '"'
     ) {
-      inString =
-        true;
-
+      inString = true;
       continue;
     }
 
@@ -353,69 +347,141 @@ function scanBalancedObject(
 }
 
 
-function extractRouterData(html) {
+function scanString(
+  text,
+  start
+) {
+  let escaped =
+    false;
 
   for (
-    const marker
-    of [
-      "window._ROUTER_DATA",
-      "_ROUTER_DATA"
-    ]
+    let i = start + 1;
+    i < text.length;
+    i += 1
   ) {
 
-    const markerIndex =
-      html.indexOf(
-        marker
+    const ch =
+      text[i];
+
+    if (escaped) {
+      escaped = false;
+
+    } else if (
+      ch === "\\"
+    ) {
+      escaped = true;
+
+    } else if (
+      ch === '"'
+    ) {
+      return text.slice(
+        start,
+        i + 1
       );
+    }
+  }
+
+  return null;
+}
+
+
+/*
+ * 重要修正：
+ *
+ * 抖音目前兩種都可能出現：
+ *
+ * window._ROUTER_DATA = {...}
+ *
+ * 或：
+ *
+ * window._ROUTER_DATA = "{\"loaderData\":...}"
+ */
+function extractRouterData(html) {
+  const marker =
+    html.indexOf(
+      "_ROUTER_DATA"
+    );
+
+  if (
+    marker < 0
+  ) {
+    return null;
+  }
+
+  const equal =
+    html.indexOf(
+      "=",
+      marker
+    );
+
+  if (
+    equal < 0
+  ) {
+    return null;
+  }
+
+  let pos =
+    equal + 1;
+
+  while (
+    pos < html.length &&
+    /\s/.test(
+      html[pos]
+    )
+  ) {
+    pos += 1;
+  }
+
+  try {
 
     if (
-      markerIndex < 0
+      html[pos] === "{"
     ) {
-      continue;
-    }
 
-    const equalIndex =
-      html.indexOf(
-        "=",
-        markerIndex
-      );
+      const raw =
+        scanObject(
+          html,
+          pos
+        );
 
-    if (
-      equalIndex < 0
-    ) {
-      continue;
-    }
+      if (!raw) {
+        return null;
+      }
 
-    const objectStart =
-      html.indexOf(
-        "{",
-        equalIndex
-      );
-
-    if (
-      objectStart < 0
-    ) {
-      continue;
-    }
-
-    const raw =
-      scanBalancedObject(
-        html,
-        objectStart
-      );
-
-    if (!raw) {
-      continue;
-    }
-
-    try {
       return JSON.parse(
         raw
       );
-
-    } catch {
-      // 繼續嘗試其他結構
     }
+
+    if (
+      html[pos] === '"'
+    ) {
+
+      const literal =
+        scanString(
+          html,
+          pos
+        );
+
+      if (!literal) {
+        return null;
+      }
+
+      const decoded =
+        JSON.parse(
+          literal
+        );
+
+      return JSON.parse(
+        decoded
+      );
+    }
+
+  } catch (error) {
+    console.error(
+      "ROUTER_DATA parse:",
+      error
+    );
   }
 
   return null;
@@ -434,14 +500,14 @@ function extractScriptJson(
       "\\$&"
     );
 
-  const re =
+  const regex =
     new RegExp(
       `<script[^>]+id=["']${escaped}["'][^>]*>([\\s\\S]*?)<\\/script>`,
       "i"
     );
 
   const match =
-    html.match(re);
+    html.match(regex);
 
   if (!match) {
     return null;
@@ -451,20 +517,99 @@ function extractScriptJson(
 
     const raw =
       decode
-
         ? decodeURIComponent(
             match[1]
           )
-
         : match[1];
 
-    return JSON.parse(
-      raw
-    );
+    return JSON.parse(raw);
 
   } catch {
     return null;
   }
+}
+
+
+/*
+ * 先直接找最常見結構，
+ * 再做遞迴搜尋。
+ */
+function directItem(
+  data
+) {
+
+  if (
+    !data ||
+    typeof data !==
+      "object"
+  ) {
+    return null;
+  }
+
+  if (
+    Array.isArray(
+      data.item_list
+    ) &&
+    data.item_list[0]
+  ) {
+    return data.item_list[0];
+  }
+
+  if (
+    Array.isArray(
+      data.aweme_list
+    ) &&
+    data.aweme_list[0]
+  ) {
+    return data.aweme_list[0];
+  }
+
+  if (
+    data.aweme_detail
+  ) {
+    return data.aweme_detail;
+  }
+
+  if (
+    data.aweme
+  ) {
+    return data.aweme;
+  }
+
+  const loader =
+    data.loaderData;
+
+  if (
+    loader &&
+    typeof loader ===
+      "object"
+  ) {
+
+    for (
+      const value
+      of Object.values(
+        loader
+      )
+    ) {
+
+      const item =
+        value?.videoInfoRes
+          ?.item_list?.[0] ||
+
+        value?.videoInfoRes
+          ?.aweme_list?.[0] ||
+
+        value?.aweme_detail ||
+
+        value?.aweme;
+
+      if (item) {
+        return item;
+      }
+    }
+  }
+
+  return null;
 }
 
 
@@ -477,7 +622,7 @@ function findItem(
 
   if (
     node == null ||
-    depth > 45
+    depth > 50
   ) {
     return null;
   }
@@ -501,20 +646,20 @@ function findItem(
   ) {
 
     for (
-      const item
+      const value
       of node
     ) {
 
-      const found =
+      const result =
         findItem(
-          item,
+          value,
           targetId,
           seen,
           depth + 1
         );
 
-      if (found) {
-        return found;
+      if (result) {
+        return result;
       }
     }
 
@@ -537,18 +682,26 @@ function findItem(
       ""
     );
 
-  const hasMedia =
+  const hasImages =
     Boolean(
-      node.video ||
       node.images ||
       node.image_list ||
       node.image_infos ||
+      node.original_images ||
       node.image_post_info ||
       node.imagePostInfo
     );
 
+  const hasVideo =
+    Boolean(
+      node.video
+    );
+
   if (
-    hasMedia &&
+    (
+      hasImages ||
+      hasVideo
+    ) &&
     (
       !targetId ||
       !id ||
@@ -559,46 +712,12 @@ function findItem(
     return node;
   }
 
-  const priorityKeys = [
-    "item_list",
-    "aweme_list",
-    "aweme_detail",
-    "aweme",
-    "videoInfoRes",
-    "loaderData",
-    "app",
-    "videoDetail"
-  ];
-
-  for (
-    const key
-    of priorityKeys
-  ) {
-
-    if (
-      key in node
-    ) {
-
-      const found =
-        findItem(
-          node[key],
-          targetId,
-          seen,
-          depth + 1
-        );
-
-      if (found) {
-        return found;
-      }
-    }
-  }
-
   for (
     const value
     of Object.values(node)
   ) {
 
-    const found =
+    const result =
       findItem(
         value,
         targetId,
@@ -606,8 +725,8 @@ function findItem(
         depth + 1
       );
 
-    if (found) {
-      return found;
+    if (result) {
+      return result;
     }
   }
 
@@ -615,37 +734,79 @@ function findItem(
 }
 
 
+function getItem(
+  data,
+  awemeId
+) {
+
+  if (!data) {
+    return null;
+  }
+
+  const direct =
+    directItem(data);
+
+  if (direct) {
+
+    const id =
+      String(
+        direct.aweme_id ||
+        direct.awemeId ||
+        ""
+      );
+
+    if (
+      !id ||
+      id ===
+        String(awemeId)
+    ) {
+      return direct;
+    }
+  }
+
+  return findItem(
+    data,
+    awemeId
+  );
+}
+
+
+/* -----------------------------------------
+   媒體 URL
+----------------------------------------- */
+
+
 function pickUrl(
-  node,
+  value,
   preferLast = false
 ) {
 
-  if (!node) {
+  if (!value) {
     return null;
   }
 
   if (
-    typeof node ===
+    typeof value ===
     "string"
   ) {
 
-    return node.startsWith(
+    return value.startsWith(
       "http"
     )
-      ? node
+      ? value
       : null;
   }
 
   if (
-    Array.isArray(node)
+    Array.isArray(value)
   ) {
 
     const urls =
-      node.filter(
-        x =>
-          typeof x ===
+      value.filter(
+        item =>
+          typeof item ===
             "string" &&
-          x.startsWith(
+          item.startsWith(
             "http"
           )
       );
@@ -658,50 +819,50 @@ function pickUrl(
 
     const https =
       urls.filter(
-        x =>
-          x.startsWith(
+        url =>
+          url.startsWith(
             "https://"
           )
       );
 
-    const chosen =
+    const list =
       https.length
         ? https
         : urls;
 
     return preferLast
-      ? chosen[
-          chosen.length - 1
+      ? list[
+          list.length - 1
         ]
-      : chosen[0];
+      : list[0];
   }
 
   if (
-    typeof node ===
+    typeof value ===
     "object"
   ) {
 
     return (
       pickUrl(
-        node.url_list,
+        value.url_list,
         preferLast
       ) ||
 
       pickUrl(
-        node.urlList,
+        value.urlList,
         preferLast
       ) ||
 
       pickUrl(
-        node.urls,
+        value.urls,
         preferLast
       ) ||
 
       (
-        typeof node.url ===
+        typeof value.url ===
         "string"
 
-          ? node.url
+          ? value.url
           : null
       )
     );
@@ -711,7 +872,127 @@ function pickUrl(
 }
 
 
-function cleanPlayUrl(url) {
+function imageNodes(item) {
+
+  const candidates = [
+    item?.image_post_info
+      ?.images,
+
+    item?.image_post_info
+      ?.image_list,
+
+    item?.imagePostInfo
+      ?.images,
+
+    item?.imagePostInfo
+      ?.imageList,
+
+    item?.images,
+
+    item?.image_list,
+
+    item?.image_infos,
+
+    item?.original_images
+  ];
+
+  return (
+    candidates.find(
+      value =>
+        Array.isArray(value) &&
+        value.length > 0
+    ) || []
+  );
+}
+
+
+/*
+ * 優先順序：
+ *
+ * 原圖 / download
+ * ↓
+ * origin
+ * ↓
+ * display
+ * ↓
+ * 普通 url_list
+ */
+function imageUrl(image) {
+
+  if (!image) {
+    return null;
+  }
+
+  return (
+    pickUrl(
+      image.download_url,
+      true
+    ) ||
+
+    pickUrl(
+      image.downloadUrl,
+      true
+    ) ||
+
+    pickUrl(
+      image.download_url_list,
+      true
+    ) ||
+
+    pickUrl(
+      image.downloadUrlList,
+      true
+    ) ||
+
+    pickUrl(
+      image.origin_url,
+      true
+    ) ||
+
+    pickUrl(
+      image.originUrl,
+      true
+    ) ||
+
+    pickUrl(
+      image.origin_image,
+      true
+    ) ||
+
+    pickUrl(
+      image.originImage,
+      true
+    ) ||
+
+    pickUrl(
+      image.display_image,
+      true
+    ) ||
+
+    pickUrl(
+      image.displayImage,
+      true
+    ) ||
+
+    pickUrl(
+      image.url_list,
+      true
+    ) ||
+
+    pickUrl(
+      image.urlList,
+      true
+    ) ||
+
+    pickUrl(
+      image,
+      true
+    )
+  );
+}
+
+
+function cleanVideoUrl(url) {
 
   if (!url) {
     return null;
@@ -729,79 +1010,7 @@ function cleanPlayUrl(url) {
 }
 
 
-function imageArrayFromItem(
-  item
-) {
-
-  const candidates = [
-    item?.image_post_info?.images,
-    item?.image_post_info?.image_list,
-    item?.imagePostInfo?.images,
-    item?.imagePostInfo?.imageList,
-    item?.images,
-    item?.image_list,
-    item?.image_infos,
-    item?.original_images
-  ];
-
-  return (
-    candidates.find(
-      x =>
-        Array.isArray(x) &&
-        x.length
-    ) || []
-  );
-}
-
-
-function extractImageUrl(
-  image
-) {
-
-  if (!image) {
-    return null;
-  }
-
-  return (
-    pickUrl(
-      image.url_list,
-      true
-    ) ||
-
-    pickUrl(
-      image.urlList,
-      true
-    ) ||
-
-    pickUrl(
-      image.origin_url,
-      true
-    ) ||
-
-    pickUrl(
-      image.originUrl,
-      true
-    ) ||
-
-    pickUrl(
-      image.display_image,
-      true
-    ) ||
-
-    pickUrl(
-      image.displayImage,
-      true
-    ) ||
-
-    pickUrl(
-      image,
-      true
-    )
-  );
-}
-
-
-function extractCover(item) {
+function coverUrl(item) {
 
   const video =
     item?.video || {};
@@ -819,8 +1028,12 @@ function extractCover(item) {
     ) ||
 
     pickUrl(
-      video.dynamic_cover ||
-      video.dynamicCover,
+      item?.video?.dynamic_cover,
+      true
+    ) ||
+
+    pickUrl(
+      item?.cover,
       true
     ) ||
 
@@ -829,7 +1042,7 @@ function extractCover(item) {
 }
 
 
-function extractVideo(item) {
+function bestVideo(item) {
 
   const video =
     item?.video || {};
@@ -840,14 +1053,10 @@ function extractVideo(item) {
   const bitRates =
     video.bit_rate ||
     video.bitRate ||
-    video.bit_rate_list ||
-    video.bitRateList ||
     [];
 
   if (
-    Array.isArray(
-      bitRates
-    )
+    Array.isArray(bitRates)
   ) {
 
     for (
@@ -856,15 +1065,13 @@ function extractVideo(item) {
     ) {
 
       const addr =
-        entry?.play_addr ||
-        entry?.playAddr ||
         entry?.play_addr_h264 ||
         entry?.playAddrH264 ||
-        entry?.download_addr ||
-        entry?.downloadAddr;
+        entry?.play_addr ||
+        entry?.playAddr;
 
       const url =
-        cleanPlayUrl(
+        cleanVideoUrl(
           pickUrl(
             addr,
             true
@@ -883,7 +1090,7 @@ function extractVideo(item) {
             Number(
               addr?.width ||
               entry?.width ||
-              video?.width ||
+              video.width ||
               0
             ),
 
@@ -891,7 +1098,7 @@ function extractVideo(item) {
             Number(
               addr?.height ||
               entry?.height ||
-              video?.height ||
+              video.height ||
               0
             ),
 
@@ -907,6 +1114,12 @@ function extractVideo(item) {
               entry?.data_size ||
               entry?.dataSize ||
               0
+            ),
+
+          h265:
+            Boolean(
+              entry?.is_h265 ||
+              entry?.isH265
             )
         }
       );
@@ -926,7 +1139,7 @@ function extractVideo(item) {
   ) {
 
     const url =
-      cleanPlayUrl(
+      cleanVideoUrl(
         pickUrl(
           addr,
           true
@@ -944,53 +1157,63 @@ function extractVideo(item) {
         width:
           Number(
             addr?.width ||
-            video?.width ||
+            video.width ||
             0
           ),
 
         height:
           Number(
             addr?.height ||
-            video?.height ||
+            video.height ||
             0
           ),
 
-        bitrate:
-          0,
+        bitrate: 0,
 
         size:
           Number(
             addr?.data_size ||
             addr?.dataSize ||
             0
-          )
+          ),
+
+        h265: false
       }
     );
   }
 
-  if (
-    !candidates.length
-  ) {
-    return null;
-  }
-
-  const deduped =
+  const unique =
     [
       ...new Map(
         candidates.map(
-          x => [
-            x.url,
-            x
+          item => [
+            item.url,
+            item
           ]
         )
       ).values()
     ];
 
-  deduped.sort(
+  unique.sort(
     (
       a,
       b
     ) => {
+
+      /*
+       * Safari 優先 H.264
+       */
+      if (
+        a.h265 !==
+        b.h265
+      ) {
+        return Number(
+          a.h265
+        ) -
+        Number(
+          b.h265
+        );
+      }
 
       const areaA =
         a.width *
@@ -1026,7 +1249,8 @@ function extractVideo(item) {
     }
   );
 
-  return deduped[0];
+  return unique[0] ||
+    null;
 }
 
 
@@ -1036,13 +1260,11 @@ function buildResult(
   source
 ) {
 
-  const imageNodes =
-    imageArrayFromItem(
-      item
-    );
+  const nodes =
+    imageNodes(item);
 
   const images =
-    imageNodes
+    nodes
       .map(
         (
           image,
@@ -1050,9 +1272,7 @@ function buildResult(
         ) => {
 
           const url =
-            extractImageUrl(
-              image
-            );
+            imageUrl(image);
 
           if (!url) {
             return null;
@@ -1109,11 +1329,6 @@ function buildResult(
       ""
     ).trim();
 
-  const cover =
-    extractCover(
-      item
-    );
-
   if (
     images.length
   ) {
@@ -1136,8 +1351,7 @@ function buildResult(
         desc,
 
         cover:
-          images[0]?.preview ||
-          cover,
+          images[0].preview,
 
         source
       },
@@ -1147,17 +1361,14 @@ function buildResult(
     };
   }
 
-  const bestVideo =
-    extractVideo(
-      item
-    );
+  const video =
+    bestVideo(item);
 
   if (
-    !bestVideo?.url
+    !video?.url
   ) {
-
     throw new Error(
-      "已找到作品資料，但沒有取得可下載影片地址"
+      "已取得作品資料，但沒有找到圖片或影片地址"
     );
   }
 
@@ -1177,7 +1388,10 @@ function buildResult(
 
       author,
       desc,
-      cover,
+
+      cover:
+        coverUrl(item),
+
       source
     },
 
@@ -1190,21 +1404,21 @@ function buildResult(
           "影片",
 
         url:
-          bestVideo.url,
+          video.url,
 
         preview:
-          cover,
+          coverUrl(item),
 
         width:
-          bestVideo.width ||
+          video.width ||
           null,
 
         height:
-          bestVideo.height ||
+          video.height ||
           null,
 
         bitrate:
-          bestVideo.bitrate ||
+          video.bitrate ||
           null,
 
         format:
@@ -1218,15 +1432,124 @@ function buildResult(
 }
 
 
-/*
- * 2026 版主路徑：
- *
- * 普通影片直接請求抖音移動端 Feed。
- *
- * 比單純依賴 share/video HTML
- * 穩定很多。
- */
-async function fetchFeedItem(
+/* -----------------------------------------
+   策略 1：
+   舊 ItemInfo API
+   圖集特別值得先試
+----------------------------------------- */
+
+
+async function fetchItemInfo(
+  awemeId
+) {
+
+  const url =
+    "https://www.iesdouyin.com/" +
+    "web/api/v2/aweme/iteminfo/" +
+    "?item_ids=" +
+    encodeURIComponent(
+      awemeId
+    );
+
+  const diagnostics =
+    [];
+
+  for (
+    const ua
+    of [
+      IPHONE_UA,
+      ANDROID_UA
+    ]
+  ) {
+
+    try {
+
+      const response =
+        await fetch(
+          url,
+          {
+            headers: {
+              "User-Agent":
+                ua,
+
+              "Accept":
+                "application/json,text/plain,*/*",
+
+              "Accept-Language":
+                "zh-CN,zh;q=0.9",
+
+              "Referer":
+                "https://www.iesdouyin.com/"
+            },
+
+            redirect:
+              "follow",
+
+            cache:
+              "no-store"
+          }
+        );
+
+      diagnostics.push(
+        `iteminfo:${response.status}`
+      );
+
+      if (
+        !response.ok
+      ) {
+        continue;
+      }
+
+      const data =
+        await response
+          .json()
+          .catch(
+            () => null
+          );
+
+      if (!data) {
+        continue;
+      }
+
+      const item =
+        getItem(
+          data,
+          awemeId
+        );
+
+      if (item) {
+
+        return {
+          item,
+          source:
+            "iteminfo",
+          diagnostics
+        };
+      }
+
+    } catch {
+
+      diagnostics.push(
+        "iteminfo:ERR"
+      );
+    }
+  }
+
+  return {
+    item: null,
+    source: null,
+    diagnostics
+  };
+}
+
+
+/* -----------------------------------------
+   策略 2：
+   Mobile Feed
+----------------------------------------- */
+
+
+async function fetchFeed(
   awemeId
 ) {
 
@@ -1252,7 +1575,7 @@ async function fetchFeedItem(
     [];
 
   for (
-    const endpoint
+    const url
     of endpoints
   ) {
 
@@ -1260,24 +1583,24 @@ async function fetchFeedItem(
 
       const response =
         await fetch(
-          endpoint,
+          url,
           {
             headers: {
               "User-Agent":
-                MOBILE_UA,
+                ANDROID_UA,
 
               "Accept":
                 "application/json",
 
               "Accept-Language":
-                "zh-CN,zh;q=0.9",
-
-              "Referer":
-                "https://www.douyin.com/"
+                "zh-CN,zh;q=0.9"
             },
 
             redirect:
-              "follow"
+              "follow",
+
+            cache:
+              "no-store"
           }
         );
 
@@ -1303,7 +1626,7 @@ async function fetchFeedItem(
       }
 
       const item =
-        findItem(
+        getItem(
           data,
           awemeId
         );
@@ -1334,20 +1657,18 @@ async function fetchFeedItem(
 }
 
 
-/*
- * SSR 後備路徑：
- *
- * 這裡跟舊版最重要的差異有兩個：
- *
- * 1. Android Mobile UA
- * 2. ?from_ssr=1
- */
-async function fetchSsrItem(
+/* -----------------------------------------
+   策略 3：
+   SSR 分享頁
+----------------------------------------- */
+
+
+async function fetchSSR(
   awemeId,
   typeHint
 ) {
 
-  const order =
+  const kinds =
     typeHint === "slides"
 
       ? [
@@ -1365,128 +1686,136 @@ async function fetchSsrItem(
   const diagnostics =
     [];
 
+  /*
+   * Android / iPhone 都試。
+   *
+   * 抖音不同時間對不同 UA
+   * 返回的 SSR 結構不完全一致。
+   */
   for (
-    const kind
-    of order
+    const ua
+    of [
+      IPHONE_UA,
+      ANDROID_UA
+    ]
   ) {
 
-    const url =
-      `https://www.iesdouyin.com/share/${kind}/${awemeId}/?from_ssr=1`;
+    for (
+      const kind
+      of kinds
+    ) {
 
-    try {
+      const url =
+        `https://www.iesdouyin.com/share/${kind}/${awemeId}/?from_ssr=1`;
 
-      const response =
-        await fetch(
-          url,
-          {
-            headers: {
-              "User-Agent":
-                MOBILE_UA,
+      try {
 
-              "Accept":
-                "text/html,application/xhtml+xml,*/*",
+        const response =
+          await fetch(
+            url,
+            {
+              headers: {
+                "User-Agent":
+                  ua,
 
-              "Accept-Language":
-                "zh-CN,zh;q=0.9,en;q=0.7",
+                "Accept":
+                  "text/html,application/xhtml+xml,*/*",
 
-              "Referer":
-                "https://www.douyin.com/"
-            },
+                "Accept-Language":
+                  "zh-CN,zh;q=0.9",
 
-            redirect:
-              "follow"
-          }
-        );
+                "Referer":
+                  "https://www.douyin.com/"
+              },
 
-      const html =
-        await response.text();
+              redirect:
+                "follow",
 
-      /*
-       * R = _ROUTER_DATA
-       * D = RENDER_DATA
-       * U = UNIVERSAL_DATA
-       *
-       * 如果再失敗，
-       * 錯誤訊息會直接告訴我們
-       * 抖音到底回了哪種 HTML。
-       */
-      const markers = [
-        html.includes(
-          "_ROUTER_DATA"
-        )
-          ? "R"
-          : "-",
-
-        html.includes(
-          "RENDER_DATA"
-        )
-          ? "D"
-          : "-",
-
-        html.includes(
-          "__UNIVERSAL_DATA_FOR_REHYDRATION__"
-        )
-          ? "U"
-          : "-"
-      ].join("");
-
-      diagnostics.push(
-        `${kind}:${response.status}:${html.length}:${markers}`
-      );
-
-      if (
-        !response.ok
-      ) {
-        continue;
-      }
-
-      const dataCandidates = [
-        extractRouterData(
-          html
-        ),
-
-        extractScriptJson(
-          html,
-          "RENDER_DATA",
-          true
-        ),
-
-        extractScriptJson(
-          html,
-          "__UNIVERSAL_DATA_FOR_REHYDRATION__",
-          false
-        )
-      ].filter(Boolean);
-
-      for (
-        const data
-        of dataCandidates
-      ) {
-
-        const item =
-          findItem(
-            data,
-            awemeId
+              cache:
+                "no-store"
+            }
           );
 
-        if (item) {
+        const html =
+          await response.text();
 
-          return {
-            item,
+        const markers = [
+          html.includes(
+            "_ROUTER_DATA"
+          )
+            ? "R"
+            : "-",
 
-            source:
-              `ssr-${kind}`,
+          html.includes(
+            "RENDER_DATA"
+          )
+            ? "D"
+            : "-",
 
-            diagnostics
-          };
+          html.includes(
+            "__UNIVERSAL_DATA_FOR_REHYDRATION__"
+          )
+            ? "U"
+            : "-"
+        ].join("");
+
+        diagnostics.push(
+          `${kind}:${response.status}:${html.length}:${markers}`
+        );
+
+        if (
+          !response.ok
+        ) {
+          continue;
         }
+
+        const candidates = [
+          extractRouterData(
+            html
+          ),
+
+          extractScriptJson(
+            html,
+            "RENDER_DATA",
+            true
+          ),
+
+          extractScriptJson(
+            html,
+            "__UNIVERSAL_DATA_FOR_REHYDRATION__"
+          )
+        ].filter(Boolean);
+
+        for (
+          const data
+          of candidates
+        ) {
+
+          const item =
+            getItem(
+              data,
+              awemeId
+            );
+
+          if (item) {
+
+            return {
+              item,
+
+              source:
+                `ssr-${kind}`,
+
+              diagnostics
+            };
+          }
+        }
+
+      } catch {
+
+        diagnostics.push(
+          `${kind}:ERR`
+        );
       }
-
-    } catch {
-
-      diagnostics.push(
-        `${kind}:ERR`
-      );
     }
   }
 
@@ -1496,6 +1825,11 @@ async function fetchSsrItem(
     diagnostics
   };
 }
+
+
+/* -----------------------------------------
+   Main
+----------------------------------------- */
 
 
 export default {
@@ -1535,25 +1869,71 @@ export default {
           input
         );
 
-      const allDiagnostics =
+      const diagnostics =
         [];
 
 
       /*
-       * 普通影片：
-       * Feed API → SSR
+       * 圖文：
+       *
+       * ItemInfo
+       * → SSR
+       * → Feed
        */
       if (
-        resolved.typeHint !==
+        resolved.typeHint ===
         "slides"
       ) {
 
-        const feed =
-          await fetchFeedItem(
+        const itemInfo =
+          await fetchItemInfo(
             resolved.awemeId
           );
 
-        allDiagnostics.push(
+        diagnostics.push(
+          ...itemInfo.diagnostics
+        );
+
+        if (itemInfo.item) {
+
+          return json(
+            buildResult(
+              itemInfo.item,
+              resolved.awemeId,
+              itemInfo.source
+            )
+          );
+        }
+
+
+        const ssr =
+          await fetchSSR(
+            resolved.awemeId,
+            "slides"
+          );
+
+        diagnostics.push(
+          ...ssr.diagnostics
+        );
+
+        if (ssr.item) {
+
+          return json(
+            buildResult(
+              ssr.item,
+              resolved.awemeId,
+              ssr.source
+            )
+          );
+        }
+
+
+        const feed =
+          await fetchFeed(
+            resolved.awemeId
+          );
+
+        diagnostics.push(
           ...feed.diagnostics
         );
 
@@ -1567,50 +1947,21 @@ export default {
             )
           );
         }
-      }
 
+      } else {
 
-      /*
-       * 圖文或 Feed 失敗：
-       * SSR
-       */
-      const ssr =
-        await fetchSsrItem(
-          resolved.awemeId,
-          resolved.typeHint
-        );
-
-      allDiagnostics.push(
-        ...ssr.diagnostics
-      );
-
-      if (ssr.item) {
-
-        return json(
-          buildResult(
-            ssr.item,
-            resolved.awemeId,
-            ssr.source
-          )
-        );
-      }
-
-
-      /*
-       * 圖文 SSR 沒資料時，
-       * 再試一次 Feed。
-       */
-      if (
-        resolved.typeHint ===
-        "slides"
-      ) {
-
+        /*
+         * 普通影片：
+         *
+         * 保留你現在已經成功的
+         * Feed 主路徑。
+         */
         const feed =
-          await fetchFeedItem(
+          await fetchFeed(
             resolved.awemeId
           );
 
-        allDiagnostics.push(
+        diagnostics.push(
           ...feed.diagnostics
         );
 
@@ -1621,6 +1972,49 @@ export default {
               feed.item,
               resolved.awemeId,
               feed.source
+            )
+          );
+        }
+
+
+        const itemInfo =
+          await fetchItemInfo(
+            resolved.awemeId
+          );
+
+        diagnostics.push(
+          ...itemInfo.diagnostics
+        );
+
+        if (itemInfo.item) {
+
+          return json(
+            buildResult(
+              itemInfo.item,
+              resolved.awemeId,
+              itemInfo.source
+            )
+          );
+        }
+
+
+        const ssr =
+          await fetchSSR(
+            resolved.awemeId,
+            resolved.typeHint
+          );
+
+        diagnostics.push(
+          ...ssr.diagnostics
+        );
+
+        if (ssr.item) {
+
+          return json(
+            buildResult(
+              ssr.item,
+              resolved.awemeId,
+              ssr.source
             )
           );
         }
@@ -1628,8 +2022,8 @@ export default {
 
 
       throw new Error(
-        "作品 ID 已取得，但目前所有資料通道都沒有返回作品資料" +
-        `（${allDiagnostics.join(", ")}）`
+        "作品 ID 已取得，但目前仍沒有取得媒體資料" +
+        `（${diagnostics.join(", ")}）`
       );
 
     } catch (error) {
